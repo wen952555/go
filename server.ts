@@ -11,6 +11,7 @@ import { initTelegramBotService } from './src/telegramBotService.ts';
 import { presenceTracker } from './src/presenceTracker.ts';
 import { generateRoomDeal } from './src/gameDeckService.ts';
 import { createDefaultBoardState, getSceneRequiredCoins, type AuthoritativeBoardState } from './src/gameLogic/index.ts';
+import { isEightRealtimeMode, isBookingMode, isFourRealtimeMode, createShisanshuiDeal } from './src/games/shisanshui/index.ts';
 
 // Auto-detect and load .env from project directory, parent directory (~/.env), or HOME
 const possibleEnvPaths = [
@@ -523,6 +524,86 @@ wss.on('connection', (ws) => {
       function startRoomGameIfFull(room: SceneWaitingRoom) {
         if (!room) return false;
 
+        // 水镜十三水 / 十三张 (Shisanshui) 模块化场景对局逻辑
+        if (room.gameType === 'shisanshui') {
+          if (isEightRealtimeMode(room.sceneMode)) {
+            const currentCount = Array.isArray(room.players) ? room.players.length : 0;
+            if (currentCount < 5) {
+              if (room.status !== 'waiting') {
+                room.status = 'waiting';
+                delete (room as any).deal;
+                delete (room as any).lastEightPlayerCount;
+              }
+              return false;
+            }
+
+            // 5 ~ 8 人开启 90 秒理牌比水倒计时；当第 6/7/8 位新玩家中途加入时重置倒计时为 90 秒
+            const lastCount = (room as any).lastEightPlayerCount || 0;
+            const isNewPlayerJoined = currentCount !== lastCount;
+
+            if (isNewPlayerJoined || !(room as any).deal) {
+              (room as any).lastEightPlayerCount = currentCount;
+              const freshDeal = createShisanshuiDeal(room.sceneMode);
+              (room as any).deal = freshDeal;
+              (room as any).arrangeCountdown = 90;
+              (room as any).arrangeDeadline = Date.now() + 90000;
+              room.status = 'playing';
+
+              const defaultBoard = createDefaultBoardState(room.id, room.gameType);
+              const authRoom = rooms.get(room.id);
+              if (!authRoom) {
+                rooms.set(room.id, {
+                  id: room.id,
+                  title: `${room.sceneName} · 八人双副争霸`,
+                  gameType: room.gameType,
+                  status: 'playing',
+                  players: room.players.map((pl, idx) => ({ ...pl, seat: idx, rating: pl.rating || 1900 })),
+                  spectators: 0,
+                  turnSeat: 0,
+                  lastTurnTs: Date.now(),
+                  moveCount: 0,
+                  deal: freshDeal,
+                  modeLabel: `${room.sceneName} · 实时8人比水`,
+                  chat: [],
+                  boardState: defaultBoard,
+                });
+              } else {
+                authRoom.status = 'playing';
+                authRoom.deal = freshDeal;
+                authRoom.lastTurnTs = Date.now();
+                authRoom.players = room.players.map((pl, idx) => ({ ...pl, seat: idx, rating: pl.rating || 1900 }));
+              }
+
+              const joinText = lastCount > 0
+                ? `📢 第 ${currentCount} 位牌友加入！理牌比水倒计时重新重置为 90 秒！`
+                : `📢 ${currentCount} 位牌友已就位，开启 90 秒理牌比水倒计时！`;
+
+              console.log(`🚀 [8人实时场理牌倒计时] 房间 ${room.id} (${currentCount}/8人) ${joinText}`);
+
+              broadcast({
+                type: 'scene_room_started',
+                roomId: room.id,
+                gameType: room.gameType,
+                sceneMode: room.sceneMode,
+                players: room.players,
+                maxPlayers: 8,
+                deal: freshDeal,
+                status: 'playing',
+                arrangeCountdown: 90,
+                timerReset: true,
+                joinNotification: joinText,
+                timestamp: Date.now(),
+              });
+              return true;
+            }
+            return true;
+          }
+
+          if (isBookingMode(room.sceneMode)) {
+            return true;
+          }
+        }
+
         // 1. 若玩家人数不足 maxPlayers，强制保持 waiting 状态，严禁被错误锁定为 playing/starting
         if (!Array.isArray(room.players) || room.players.length < room.maxPlayers) {
           if (room.status !== 'waiting') {
@@ -763,13 +844,20 @@ wss.on('connection', (ws) => {
           }
         }
 
-        // 3. 若未在上述房间，寻找仍有空位且正在排队的房间（必须是 status === 'waiting' 且 players.length < maxPlayers）
-        // 凡是已经满员 (>= maxPlayers) 或已经处于 playing/starting 游戏中的房间，严禁任何新玩家进入！
+        // 3. 若未在上述房间，寻找仍有空位且正在排队的房间
+        const isShisanshuiEightJoin = gType === 'shisanshui' && isEightRealtimeMode(sMode);
         if (!room) {
           for (const r of sceneWaitingRooms.values()) {
-            if (r.gameType === gType && r.sceneMode === sMode && r.status === 'waiting' && r.players.length < r.maxPlayers) {
-              room = r;
-              break;
+            if (r.gameType === gType && r.sceneMode === sMode) {
+              if (isShisanshuiEightJoin) {
+                if (r.players.length < 8) {
+                  room = r;
+                  break;
+                }
+              } else if (r.status === 'waiting' && r.players.length < r.maxPlayers) {
+                room = r;
+                break;
+              }
             }
           }
         }
@@ -814,8 +902,12 @@ wss.on('connection', (ws) => {
         }
 
         // 6. 核心硬保障：若选中的房间已满员 (>= maxPlayers) 或已开局，且当前玩家不是该房间原有成员，绝对不能加入！
-        // 必须为该玩家开辟全新房间等待其他玩家加入！
-        if (existingIdx === -1 && (room.players.length >= room.maxPlayers || room.status === 'playing' || room.status === 'starting')) {
+        // 八人实时场中途允许 5 ~ 7 人时加入，直到满 8 人才算满员隔离
+        const isRoomClosedForNewPlayer = isShisanshuiEightJoin
+          ? room.players.length >= 8
+          : (room.players.length >= room.maxPlayers || room.status === 'playing' || room.status === 'starting');
+
+        if (existingIdx === -1 && isRoomClosedForNewPlayer) {
           console.log(`🀄 [房间满员硬隔离] 房间 ${room.id} (${room.gameType}) 已有 ${room.players.length}/${room.maxPlayers} 人且在游戏中，为新茶客 ${p.name}(${p.id}) 独立创建新房间等待加入！`);
           const newRoomId = `SCENE-${gType}-${sMode}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
           room = {

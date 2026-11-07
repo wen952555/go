@@ -8,3 +8,4 @@ export * from './bookingTrain.ts';
 export * from './scenes.ts';
 export * from './settlement.ts';
 export * from './audioMap.ts';
+export * from './roomLogic.ts';

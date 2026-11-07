@@ -445,6 +445,14 @@
                 <span v-if="p.isFoul" class="text-[9px] px-1.5 py-0.2 rounded bg-red-600/30 text-red-300 border border-red-500/50 font-bold shrink-0">
                   ⚠️ 倒水
                 </span>
+                <span
+                  class="text-[9px] px-1.5 py-0.2 rounded border font-mono font-bold shrink-0 transition-all"
+                  :class="isPlayerReadyAtSeat(p.seat)
+                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                    : 'bg-amber-950/60 text-amber-300/80 border-amber-500/40'"
+                >
+                  {{ isPlayerReadyAtSeat(p.seat) ? '✅ 已准备' : '⏳ 思考中...' }}
+                </span>
               </div>
 
               <div class="flex items-center gap-1 shrink-0 ml-1">
@@ -850,8 +858,27 @@ const arrangeCountdown = ref(45);
 let arrangeTimer: any = null;
 
 const hasClickedReady = ref(false);
+
+function isPlayerReadyAtSeat(seat: number): boolean {
+  if (seat === mySeat.value && hasClickedReady.value) return true;
+  const p = (props.roomPlayers || []).find((pl: any) => pl && pl.seat === seat);
+  return Boolean(p?.isReady);
+}
+
 const readyPlayersCount = computed(() => {
-  return (props.roomPlayers || []).filter((p: any) => p?.isReady).length;
+  if (!props.roomPlayers || props.roomPlayers.length === 0) {
+    return hasClickedReady.value ? 1 : 0;
+  }
+  const readySeats = new Set<number>();
+  props.roomPlayers.forEach((p: any) => {
+    if (p && p.isReady && typeof p.seat === 'number') {
+      readySeats.add(p.seat);
+    }
+  });
+  if (hasClickedReady.value && typeof mySeat.value === 'number') {
+    readySeats.add(mySeat.value);
+  }
+  return Math.min(totalSeatsCount.value, readySeats.size);
 });
 const showGunshotAnim = ref(false);
 const isGrandSlam = ref(false);
@@ -1581,6 +1608,7 @@ function dealNewMatch(forceReApply = false) {
   // 重置比水与结算状态
   hasCompared.value = false;
   isWaitingShowdown.value = false;
+  hasClickedReady.value = false;
   submittedSeats.value.clear();
   remoteSubmittedHands.value.clear();
   totalScore.value = 0;
@@ -1597,8 +1625,9 @@ function dealNewMatch(forceReApply = false) {
     clearInterval(arrangeTimer);
     arrangeTimer = null;
   }
-  arrangeCountdown.value = 45;
-  if (!isBookingScene.value) {
+  const defaultSeconds = props.sceneMode === 'eight-realtime' ? 90 : (isBookingScene.value ? 0 : 45);
+  arrangeCountdown.value = defaultSeconds;
+  if (!isBookingScene.value && defaultSeconds > 0) {
     arrangeTimer = setInterval(() => {
       if (hasCompared.value) {
         if (arrangeTimer) {
@@ -2646,6 +2675,7 @@ function executeShowdown() {
   setTimeout(() => {
     showGunshotAnim.value = false;
     hasCompared.value = true;
+    hasClickedReady.value = false;
     soundFX.playVictory();
     if (totalNet > 0) {
       haptics.victory();
@@ -2733,7 +2763,42 @@ function onWsMessage(ev: MessageEvent) {
       if (msg.deal) {
         dealNewMatch(true);
       }
-    } else if (msg.type === 'scene_room_full' || msg.type === 'scene_room_started') {
+    } else if (msg.type === 'scene_room_full' || msg.type === 'scene_room_started' || msg.type === 'scene_room_update') {
+      if (msg.arrangeCountdown && typeof msg.arrangeCountdown === 'number') {
+        arrangeCountdown.value = msg.arrangeCountdown;
+      }
+      if (msg.timerReset) {
+        if (arrangeTimer) {
+          clearInterval(arrangeTimer);
+          arrangeTimer = null;
+        }
+        const resetSecs = msg.arrangeCountdown || (props.sceneMode === 'eight-realtime' ? 90 : 45);
+        arrangeCountdown.value = resetSecs;
+        if (!isBookingScene.value && !hasCompared.value) {
+          arrangeTimer = setInterval(() => {
+            if (hasCompared.value) {
+              if (arrangeTimer) { clearInterval(arrangeTimer); arrangeTimer = null; }
+              return;
+            }
+            arrangeCountdown.value--;
+            if (arrangeCountdown.value <= 0) {
+              if (arrangeTimer) { clearInterval(arrangeTimer); arrangeTimer = null; }
+              if (!hasCompared.value) {
+                if (!isWaitingShowdown.value) {
+                  if (!isSetComplete.value) {
+                    applyStrategy('optimal', false);
+                  }
+                  handleCompare();
+                }
+                executeShowdown();
+              }
+            }
+          }, 1000);
+        }
+      }
+      if (msg.joinNotification) {
+        showToast(msg.joinNotification);
+      }
       if (msg.deal) {
         dealNewMatch(false);
       }

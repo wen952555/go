@@ -396,6 +396,10 @@
               <span class="truncate text-amber-200 font-bold">{{ winningBreakdown.fans.join(' + ') }}</span>
             </div>
             <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+              <div class="text-[11px] sm:text-xs text-amber-300 font-mono bg-black/50 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-amber-500/40 inline-flex items-center gap-1.5 shadow-md shrink-0">
+                <span>⚡ 全员准备:</span>
+                <span class="font-bold text-amber-200">{{ readyPlayersCount }} / 4</span>
+              </div>
               <button
                 type="button"
                 @click="handleLeaveToLobby"
@@ -681,9 +685,27 @@ function cleanDealingTimers() {
 }
 
 const hasClickedReady = ref(false);
+
+function isPlayerReadyAtSeat(seat: number): boolean {
+  if (seat === mySeat.value && hasClickedReady.value) return true;
+  const p = (props.roomPlayers || []).find((pl: any) => pl && pl.seat === seat);
+  return Boolean(p?.isReady);
+}
+
 const readyPlayersCount = computed(() => {
-  if (!props.roomPlayers || props.roomPlayers.length === 0) return 1;
-  return props.roomPlayers.filter((p: any) => p && p.isReady).length;
+  if (!props.roomPlayers || props.roomPlayers.length === 0) {
+    return hasClickedReady.value ? 1 : 0;
+  }
+  const readySeats = new Set<number>();
+  props.roomPlayers.forEach((p: any) => {
+    if (p && p.isReady && typeof p.seat === 'number') {
+      readySeats.add(p.seat);
+    }
+  });
+  if (hasClickedReady.value && typeof mySeat.value === 'number') {
+    readySeats.add(mySeat.value);
+  }
+  return Math.min(4, readySeats.size);
 });
 
 const isAutoHost = ref(false);
@@ -1757,6 +1779,7 @@ function triggerMahjongWin(winnerSeat: number, isFourHongzhong = false) {
   if (announceTimer) clearTimeout(announceTimer);
 
   hasWon.value = true;
+  hasClickedReady.value = false;
   const isPlayer = winnerSeat === 0;
   const seatNames = ['您 (本席)', '东席 (南洋商贾)', '北席 (九龙棋杰)', '西席 (濠江赌客)'];
   const winnerName = seatNames[winnerSeat] || '雀圣';
@@ -2579,6 +2602,7 @@ function handleDraw() {
   if (myHand.value.length % 3 !== 1) return;
   if (wallPool.length === 0) {
     isDrawStalemate.value = true;
+    hasClickedReady.value = false;
     stopTurnCountdown();
     drawTable();
     return;
