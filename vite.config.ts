@@ -1750,19 +1750,64 @@ function chessWebSocketPlugin(): Plugin {
               continue;
             }
 
-            // 2. 烟三及其他出牌类游戏超时保障
-            if (room.lastTurnTs && now - room.lastTurnTs > 20000) {
-              room.lastTurnTs = now;
-              const currentSeat = room.turnSeat || 0;
-              const totalSeats = room.boardState.handsCount?.length || 4;
-              // 烟三规则：出牌严格逆时针旋转：(currentSeat - 1 + totalSeats) % totalSeats
-              const nextSeat = room.gameType === 'yansan'
-                ? (currentSeat - 1 + totalSeats) % totalSeats
-                : (currentSeat + 1) % totalSeats;
+              // 2. 经典国标麻将超时保障：若离线/卡顿超过32秒，服务端自动代为打出一张牌并流转回合
+              if (room.gameType === 'mahjong') {
+                if (room.lastTurnTs && now - room.lastTurnTs > 32000) {
+                  room.lastTurnTs = now;
+                  const currentSeat = room.turnSeat || 0;
+                  const nextSeat = (currentSeat + 1) % 4;
+                  room.turnSeat = nextSeat;
+                  room.boardState.turnSeat = nextSeat;
+                  room.boardState.updatedAt = now;
+                  room.moveCount = (room.moveCount || 0) + 1;
+                  room.boardState.moveCount = room.moveCount;
 
-              room.turnSeat = nextSeat;
-              room.boardState.turnSeat = nextSeat;
-              room.boardState.updatedAt = now;
+                  const autoTile = {
+                    id: `auto-discard-${currentSeat}-${now}`,
+                    type: 'wan',
+                    value: 1,
+                    text: '一万',
+                    autoManaged: true,
+                    discardBy: currentSeat,
+                  };
+
+                  broadcast({
+                    type: 'game_event',
+                    roomId: room.id,
+                    seat: currentSeat,
+                    event: {
+                      action: 'mahjong_discard',
+                      seat: currentSeat,
+                      tile: autoTile,
+                      nextTurn: nextSeat,
+                      autoManaged: true,
+                    },
+                    payload: {
+                      action: 'mahjong_discard',
+                      seat: currentSeat,
+                      tile: autoTile,
+                      nextTurn: nextSeat,
+                      autoManaged: true,
+                    },
+                    moveCount: room.moveCount,
+                    boardState: room.boardState,
+                  });
+                }
+                continue;
+              }
+
+              // 3. 经典烟三超时保障
+              if (room.gameType === 'yansan') {
+                if (room.lastTurnTs && now - room.lastTurnTs > 20000) {
+                  room.lastTurnTs = now;
+                  const currentSeat = room.turnSeat || 0;
+                  const totalSeats = room.boardState.handsCount?.length || 4;
+                  // 烟三规则：出牌严格逆时针旋转：(currentSeat - 1 + totalSeats) % totalSeats
+                  const nextSeat = (currentSeat - 1 + totalSeats) % totalSeats;
+
+                  room.turnSeat = nextSeat;
+                  room.boardState.turnSeat = nextSeat;
+                  room.boardState.updatedAt = now;
 
               const isYansanFirstMove = room.gameType === 'yansan' && (room.moveCount === 0 || !room.boardState.lastCombo);
               if (isYansanFirstMove) {

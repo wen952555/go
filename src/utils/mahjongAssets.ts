@@ -242,13 +242,14 @@ export function renderMahjongTile(
     ctx.fillStyle = tile.color || '#1E293B';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    const txt = String(tile.text || (tile.type ? `${tile.value}${tile.type}` : ''));
     if (w < 30) {
       ctx.font = `bold ${Math.floor(h * 0.42)}px sans-serif`;
-      ctx.fillText(tile.text.slice(0, 1), x + w / 2, y + h / 2);
+      ctx.fillText(txt.slice(0, 1), x + w / 2, y + h / 2);
     } else {
       ctx.font = `bold ${Math.floor(h * 0.28)}px "Noto Serif SC", serif`;
-      ctx.fillText(tile.text.slice(0, 1), x + w / 2, y + h * 0.35);
-      ctx.fillText(tile.text.slice(1, 2), x + w / 2, y + h * 0.72);
+      ctx.fillText(txt.slice(0, 1), x + w / 2, y + h * 0.35);
+      ctx.fillText(txt.slice(1, 2), x + w / 2, y + h * 0.72);
     }
   }
 
