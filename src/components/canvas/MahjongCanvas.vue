@@ -522,6 +522,10 @@ const mySeat = computed(() => {
   return 0;
 });
 
+const isMultiplayer = computed(() => {
+  return !props.isPracticeMode && Boolean(props.ws);
+});
+
 const getSeatName = (seat: number) => {
   if (props.roomPlayers && props.roomPlayers.length > 0) {
     const absSeat = (mySeat.value + seat) % 4;
@@ -1390,10 +1394,12 @@ function finishDealingAndStartPlay() {
       ? `👑 【${SEAT_NAMES[dealerSeat.value]}】上局自摸连庄，执 14 张牌率先出牌...`
       : `👑 【${SEAT_NAMES[dealerSeat.value]}】是庄家，执 14 张牌率先出牌...`;
     drawTable();
-    const t = setTimeout(() => {
-      botPlay(dealerSeat.value, () => passTurnToNext(dealerSeat.value));
-    }, 950);
-    dealingAnimTimers.push(t);
+    if (props.isPracticeMode) {
+      const t = setTimeout(() => {
+        botPlay(dealerSeat.value, () => passTurnToNext(dealerSeat.value));
+      }, 950);
+      dealingAnimTimers.push(t);
+    }
   }
 }
 
@@ -2614,6 +2620,28 @@ function handleDraw() {
   soundFX.playMahjongClack();
   haptics.mahjongClack();
 
+  if (isMultiplayer.value && props.ws && props.ws.readyState === WebSocket.OPEN) {
+    try {
+      props.ws.send(
+        JSON.stringify({
+          type: 'game_move',
+          roomId: props.roomId,
+          seat: mySeat.value,
+          payload: {
+            action: 'mahjong_draw',
+            seat: mySeat.value,
+            tile: newTile,
+          },
+          event: {
+            action: 'mahjong_draw',
+            seat: mySeat.value,
+            tile: newTile,
+          },
+        })
+      );
+    } catch {}
+  }
+
   // 特殊规则：摸到四张红中直接结束游戏！
   if (isHongzhongMode.value && myHand.value.filter(isHongzhong).length === 4) {
     drawTable();
@@ -2645,7 +2673,37 @@ function handleDiscardSelected() {
   soundFX.speakVoice(discarded.text);
   drawTable();
   emit('move', { action: 'discard', tile: discarded });
-  passTurnToNext(0);
+
+  const nextAbsSeat = (mySeat.value + 1) % 4;
+  if (isMultiplayer.value && props.ws && props.ws.readyState === WebSocket.OPEN) {
+    try {
+      props.ws.send(
+        JSON.stringify({
+          type: 'game_move',
+          roomId: props.roomId,
+          seat: mySeat.value,
+          payload: {
+            action: 'mahjong_discard',
+            seat: mySeat.value,
+            tile: discarded,
+            nextTurn: nextAbsSeat,
+          },
+          event: {
+            action: 'mahjong_discard',
+            seat: mySeat.value,
+            tile: discarded,
+            nextTurn: nextAbsSeat,
+          },
+        })
+      );
+    } catch {}
+  }
+
+  if (props.isPracticeMode) {
+    passTurnToNext(0);
+  } else {
+    turnPlayer.value = 1; // Relative next seat
+  }
 }
 
 // 规则：可以碰 (他人出牌时，从手牌中拿出2张相同牌与他人弃牌组成明刻)
@@ -2669,9 +2727,33 @@ function handlePeng() {
     haptics.sealStamp();
     soundFX.speakAction('peng');
     emit('fx', 'peng');
-    tipMessage.value = `碰牌成功！碰进【${d.text}】亮刻，请打出一张牌`;
+
     turnPlayer.value = 0;
     selectedIndex.value = null;
+
+    if (isMultiplayer.value && props.ws && props.ws.readyState === WebSocket.OPEN) {
+      try {
+        props.ws.send(
+          JSON.stringify({
+            type: 'game_move',
+            roomId: props.roomId,
+            seat: mySeat.value,
+            payload: {
+              action: 'mahjong_peng',
+              seat: mySeat.value,
+              tile: d,
+            },
+            event: {
+              action: 'mahjong_peng',
+              seat: mySeat.value,
+              tile: d,
+            },
+          })
+        );
+      } catch {}
+    }
+
+    tipMessage.value = `碰牌成功！碰进【${d.text}】亮刻，请打出一张牌`;
     drawTable();
     if (isAutoHost.value) {
       checkAutoHostTurn();
@@ -2693,10 +2775,10 @@ function handleGang() {
 
   let kongedOpponentSeat: number | null = null;
   let isAnOrBuGang = false;
+  const d = lastDiscarded.value;
 
   // Case 1: 明杠 (他人弃牌)
-  if (lastDiscarded.value && turnPlayer.value !== 0) {
-    const d = lastDiscarded.value;
+  if (d && turnPlayer.value !== 0) {
     const matches = myHand.value.filter((c) => c.type === d.type && c.value === d.value);
     if (matches.length >= 3) {
       const takeThree = matches.slice(0, 3);
@@ -2761,38 +2843,70 @@ function handleGang() {
     kongRecords.value.push('您暗杠/补杠各得三家10分 (+30分，三家各多输10分)');
   }
 
+  if (isMultiplayer.value && props.ws && props.ws.readyState === WebSocket.OPEN) {
+    try {
+      props.ws.send(
+        JSON.stringify({
+          type: 'game_move',
+          roomId: props.roomId,
+          seat: mySeat.value,
+          payload: {
+            action: 'mahjong_gang',
+            seat: mySeat.value,
+            tile: d,
+          },
+          event: {
+            action: 'mahjong_gang',
+            seat: mySeat.value,
+            tile: d,
+          },
+        })
+      );
+    } catch {}
+  }
+
   // 杠后从牌墙末尾补一张牌入座 (杠上自摸机会)
   if (wallPool.length > 0) {
-    const supp = wallPool.pop()!;
-    wallCount.value = wallPool.length;
-    myHand.value.push(supp);
-    myHand.value = sortHand(myHand.value);
-
-    // 杠后摸到第4张红中直接胡牌结束游戏！
-    if (isHongzhongMode.value && myHand.value.filter(isHongzhong).length === 4) {
-      drawTable();
-      triggerMahjongWin(0, true);
-      return;
-    }
-
-    tipMessage.value = `杠牌成功！补得【${supp.text}】，请自摸胡牌或出牌`;
+    handleDraw();
   } else {
     tipMessage.value = '杠牌成功！牌墙已空，请打出一张牌';
   }
 
   selectedIndex.value = null;
   drawTable();
-  if (isAutoHost.value) {
-    checkAutoHostTurn();
-  } else {
-    startTurnCountdown();
-  }
 }
 
 // 规则：仅自摸胡牌 (不可炮胡)，调用统一结算函数
 function handleHu() {
   if (!canHu.value) return;
   const isFourHz = isHongzhongMode.value && myHand.value.filter(isHongzhong).length === 4;
+
+  if (isMultiplayer.value && props.ws && props.ws.readyState === WebSocket.OPEN) {
+    try {
+      props.ws.send(
+        JSON.stringify({
+          type: 'game_move',
+          roomId: props.roomId,
+          seat: mySeat.value,
+          payload: {
+            action: 'mahjong_hu',
+            seat: mySeat.value,
+            winnerSeat: mySeat.value,
+            breakdown: winningBreakdown.value,
+            isFourHongzhong: isFourHz,
+          },
+          event: {
+            action: 'mahjong_hu',
+            seat: mySeat.value,
+            winnerSeat: mySeat.value,
+            breakdown: winningBreakdown.value,
+            isFourHongzhong: isFourHz,
+          },
+        })
+      );
+    } catch {}
+  }
+
   triggerMahjongWin(0, isFourHz);
 }
 
@@ -2817,8 +2931,8 @@ function passTurnToNext(fromSeat: number) {
       turnPlayer.value = 0;
       handleDraw();
     });
-  } else {
-    // 轮到电脑玩家回合
+  } else if (props.isPracticeMode) {
+    // 单机/练习模式：轮到电脑玩家回合
     waitForPlayerClaim(() => {
       if (hasWon.value || isDrawStalemate.value) return;
       turnPlayer.value = nextSeat;
@@ -2830,7 +2944,136 @@ function passTurnToNext(fromSeat: number) {
         });
       }, thinkTime);
     });
+  } else {
+    // 纯真人联机：切换回合指示，等待远程玩家发送 WebSocket game_move
+    turnPlayer.value = nextSeat;
+    drawTable();
   }
+}
+
+function handleRemoteGameEvent(evt: any) {
+  if (!evt || typeof evt.seat !== 'number') return;
+  const absSeat = Number(evt.seat);
+  const relSeat = (absSeat - mySeat.value + 4) % 4;
+
+  if (relSeat === 0) return;
+
+  const action = evt.action;
+
+  if (action === 'mahjong_discard') {
+    const tile = evt.tile;
+    if (!tile) return;
+
+    const oppIdx = relSeat - 1;
+    if (oppHands.value[oppIdx] && oppHands.value[oppIdx].length > 0) {
+      oppHands.value[oppIdx].pop();
+    }
+    tile.discardBy = relSeat;
+    discards.value.push(tile);
+    lastDiscarded.value = tile;
+
+    soundFX.playMahjongClack();
+    soundFX.speakVoice(tile.text);
+
+    tipMessage.value = `🀄 【${['您', '东席', '北席', '西席'][relSeat]}】打出了【${tile.text}】`;
+    drawTable();
+
+    if (canPeng.value || canGang.value || canHu.value) {
+      isClaiming.value = true;
+      claimCountdown.value = 10;
+      pendingClaimNext = () => {
+        const nextAbs = (absSeat + 1) % 4;
+        const nextRel = (nextAbs - mySeat.value + 4) % 4;
+        turnPlayer.value = nextRel;
+        drawTable();
+        if (nextRel === 0) {
+          handleDraw();
+        }
+      };
+      if (claimInterval) clearInterval(claimInterval);
+      claimInterval = setInterval(() => {
+        claimCountdown.value--;
+        if (claimCountdown.value <= 0) {
+          handlePassClaim();
+        }
+      }, 1000);
+    } else {
+      const nextAbs = (absSeat + 1) % 4;
+      const nextRel = (nextAbs - mySeat.value + 4) % 4;
+      turnPlayer.value = nextRel;
+      drawTable();
+      if (nextRel === 0) {
+        handleDraw();
+      }
+    }
+  } else if (action === 'mahjong_draw') {
+    if (wallPool.length > 0) {
+      wallPool.shift();
+      wallCount.value = wallPool.length;
+    }
+    const oppIdx = relSeat - 1;
+    if (oppHands.value[oppIdx]) {
+      oppHands.value[oppIdx].push(evt.tile || { id: `remote-draw-${Date.now()}`, type: 'wan', value: 1, text: '一万' });
+    }
+    turnPlayer.value = relSeat;
+    drawTable();
+  } else if (action === 'mahjong_peng') {
+    const oppIdx = relSeat - 1;
+    const tile = evt.tile || lastDiscarded.value;
+    if (tile && oppHands.value[oppIdx]) {
+      const takeTwo = oppHands.value[oppIdx].slice(0, 2);
+      oppHands.value[oppIdx] = oppHands.value[oppIdx].slice(2);
+      oppMelds.value[oppIdx].push([...takeTwo, tile]);
+      if (discards.value.length > 0 && discards.value[discards.value.length - 1].id === tile.id) {
+        discards.value.pop();
+      }
+      lastDiscarded.value = null;
+      soundFX.playMahjongClack();
+      soundFX.speakAction('peng');
+      emit('fx', 'peng');
+      turnPlayer.value = relSeat;
+      tipMessage.value = `🀄 【${['您', '东席', '北席', '西席'][relSeat]}】碰了【${tile.text}】`;
+      drawTable();
+    }
+  } else if (action === 'mahjong_gang') {
+    const oppIdx = relSeat - 1;
+    const tile = evt.tile || lastDiscarded.value;
+    if (tile && oppHands.value[oppIdx]) {
+      const takeThree = oppHands.value[oppIdx].slice(0, 3);
+      oppHands.value[oppIdx] = oppHands.value[oppIdx].slice(3);
+      oppMelds.value[oppIdx].push([...takeThree, tile]);
+      if (discards.value.length > 0 && discards.value[discards.value.length - 1].id === tile.id) {
+        discards.value.pop();
+      }
+      lastDiscarded.value = null;
+      soundFX.playMahjongClack();
+      soundFX.speakAction('gang');
+      emit('fx', 'gang');
+      turnPlayer.value = relSeat;
+      drawTable();
+    }
+  } else if (action === 'mahjong_hu') {
+    triggerMahjongWin(relSeat, evt.isFourHongzhong || false);
+  }
+}
+
+function onWsMessage(ev: MessageEvent) {
+  try {
+    const msg = JSON.parse(ev.data);
+    if (msg.roomId && props.roomId && msg.roomId !== props.roomId) return;
+
+    if (msg.type === 'game_deal') {
+      if (msg.deal) dealNewMatch(msg.deal.dealerSeat, true);
+    } else if (msg.type === 'scene_room_full' || msg.type === 'scene_room_started' || msg.type === 'scene_reconnect_ack') {
+      if (msg.deal) {
+        dealNewMatch(msg.deal.dealerSeat, false);
+      }
+    } else if (msg.type === 'game_event') {
+      const evt = msg.event || msg.payload;
+      if (!evt) return;
+      handleRemoteGameEvent(evt);
+    }
+  } catch {}
 }
 
 function botPlay(seat: number, next: () => void) {
@@ -2954,6 +3197,9 @@ onMounted(() => {
   cleanupMahjongLoader = onMahjongAssetsLoaded(() => {
     drawTable();
   });
+  if (props.ws) {
+    props.ws.addEventListener('message', onWsMessage);
+  }
   dealNewMatch();
   updateDimensions();
   window.addEventListener('resize', updateDimensions);
@@ -2966,6 +3212,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (props.ws) {
+    props.ws.removeEventListener('message', onWsMessage);
+  }
   cleanupMahjongLoader?.();
   window.removeEventListener('resize', updateDimensions);
   resizeObserver?.disconnect();
