@@ -555,6 +555,11 @@ const emit = defineEmits<{
   (e: 'exit'): void;
 }>();
 
+const currentLocalRoomId = ref(props.roomId || '');
+watch(() => props.roomId, (newId) => {
+  if (newId) currentLocalRoomId.value = newId;
+}, { immediate: true });
+
 watch(() => props.tableTheme, () => {
   drawTable();
 });
@@ -565,7 +570,7 @@ watch(() => props.sceneMode, () => {
 
 watch([() => props.initialDeal, () => props.roomPlayers], ([deal]) => {
   if (deal && deal.seatCards) {
-    dealNewMatch(undefined, false);
+    dealNewMatch(undefined, false, deal);
   }
 }, { immediate: true, deep: true });
 
@@ -1109,7 +1114,7 @@ function handleLeaveToLobby() {
       props.ws.send(
         JSON.stringify({
           type: 'scene_leave',
-          roomId: props.roomId,
+          roomId: currentLocalRoomId.value || props.roomId,
           playerId: props.currentUser?.id,
           playerName: props.currentUser?.name,
           gameType: 'mahjong',
@@ -1135,7 +1140,7 @@ function onRestartGame() {
     try {
       props.ws.send(JSON.stringify({
         type: 'scene_player_ready',
-        roomId: props.roomId,
+        roomId: currentLocalRoomId.value || props.roomId,
         playerId: props.currentUser?.id,
         seat: mySeat.value,
         isReady: true,
@@ -1152,10 +1157,11 @@ function continueGame() {
 
 const lastAppliedDealId = ref<string>('');
 
-function dealNewMatch(designatedDealer?: number, forceReApply = false) {
+function dealNewMatch(designatedDealer?: number, forceReApply = false, incomingDeal?: any) {
   hasClickedReady.value = false;
-  if (props.initialDeal?.seatCards) {
-    const dealIdentifier = props.initialDeal.dealId || props.initialDeal.createdAt || (Array.isArray(props.initialDeal.seatCards[0]) ? props.initialDeal.seatCards[0].map((c: any) => c.id || c.name).join('-') : '');
+  const dealToUse = incomingDeal || props.initialDeal;
+  if (dealToUse?.seatCards) {
+    const dealIdentifier = dealToUse.dealId || dealToUse.createdAt || (Array.isArray(dealToUse.seatCards[0]) ? dealToUse.seatCards[0].map((c: any) => c.id || c.name).join('-') : '');
     if (!forceReApply && lastAppliedDealId.value && lastAppliedDealId.value === dealIdentifier && myHand.value && myHand.value.length > 0) {
       console.log(`🛡️ [麻将网络波动防重刷] 发牌 ${dealIdentifier} 已在桌上执行，跳过重复洗牌与重置`);
       return;
@@ -1171,27 +1177,27 @@ function dealNewMatch(designatedDealer?: number, forceReApply = false) {
   isDealerContinuing.value = isContinuing;
   let targetDealer = 0;
 
-  const rawDealTiles = props.initialDeal?.seatCards;
+  const rawDealTiles = dealToUse?.seatCards;
   const hasValidTiles = rawDealTiles && (Array.isArray(rawDealTiles) ? rawDealTiles.length === 4 : (rawDealTiles[0] && rawDealTiles[1] && rawDealTiles[2] && rawDealTiles[3]));
-  if (props.initialDeal && hasValidTiles) {
+  if (dealToUse && hasValidTiles) {
     const sMe = mySeat.value;
     const sEast = (sMe + 1) % 4;
     const sNorth = (sMe + 2) % 4;
     const sWest = (sMe + 3) % 4;
 
-    myHand.value = sortHand([...(props.initialDeal.seatCards[sMe] || [])]);
+    myHand.value = sortHand([...(dealToUse.seatCards[sMe] || [])]);
     oppHands.value = [
-      sortHand([...(props.initialDeal.seatCards[sEast] || [])]),
-      sortHand([...(props.initialDeal.seatCards[sNorth] || [])]),
-      sortHand([...(props.initialDeal.seatCards[sWest] || [])]),
+      sortHand([...(dealToUse.seatCards[sEast] || [])]),
+      sortHand([...(dealToUse.seatCards[sNorth] || [])]),
+      sortHand([...(dealToUse.seatCards[sWest] || [])]),
     ];
-    wallPool = [...(props.initialDeal.remainingWall || [])];
+    wallPool = [...(dealToUse.remainingWall || [])];
     wallCount.value = wallPool.length;
 
-    const rawDealer = props.initialDeal.dealerSeat !== undefined ? props.initialDeal.dealerSeat : 0;
+    const rawDealer = dealToUse.dealerSeat !== undefined ? dealToUse.dealerSeat : 0;
     targetDealer = (rawDealer - sMe + 4) % 4;
     dealerSeat.value = targetDealer;
-    dealerDice.value = props.initialDeal.dice || { d1: 1, d2: 1, sum: 2 };
+    dealerDice.value = dealToUse.dice || { d1: 1, d2: 1, sum: 2 };
   } else {
     // Standard Mahjong: strictly 136 tiles in total (36 wan + 36 tiao + 36 tong + 28 zi)
     wallPool = createTilePool();
@@ -2625,7 +2631,7 @@ function handleDraw() {
       props.ws.send(
         JSON.stringify({
           type: 'game_move',
-          roomId: props.roomId,
+          roomId: currentLocalRoomId.value || props.roomId,
           seat: mySeat.value,
           payload: {
             action: 'mahjong_draw',
@@ -2680,7 +2686,7 @@ function handleDiscardSelected() {
       props.ws.send(
         JSON.stringify({
           type: 'game_move',
-          roomId: props.roomId,
+          roomId: currentLocalRoomId.value || props.roomId,
           seat: mySeat.value,
           payload: {
             action: 'mahjong_discard',
@@ -2736,7 +2742,7 @@ function handlePeng() {
         props.ws.send(
           JSON.stringify({
             type: 'game_move',
-            roomId: props.roomId,
+            roomId: currentLocalRoomId.value || props.roomId,
             seat: mySeat.value,
             payload: {
               action: 'mahjong_peng',
@@ -2848,7 +2854,7 @@ function handleGang() {
       props.ws.send(
         JSON.stringify({
           type: 'game_move',
-          roomId: props.roomId,
+          roomId: currentLocalRoomId.value || props.roomId,
           seat: mySeat.value,
           payload: {
             action: 'mahjong_gang',
@@ -2886,7 +2892,7 @@ function handleHu() {
       props.ws.send(
         JSON.stringify({
           type: 'game_move',
-          roomId: props.roomId,
+          roomId: currentLocalRoomId.value || props.roomId,
           seat: mySeat.value,
           payload: {
             action: 'mahjong_hu',
@@ -3060,17 +3066,25 @@ function handleRemoteGameEvent(evt: any) {
 function onWsMessage(ev: MessageEvent) {
   try {
     const msg = JSON.parse(ev.data);
-    if (msg.roomId && props.roomId && msg.roomId !== props.roomId) return;
+    if (msg.roomId && !currentLocalRoomId.value) {
+      currentLocalRoomId.value = msg.roomId;
+    }
+    const activeId = currentLocalRoomId.value || props.roomId;
+    if (msg.roomId && activeId && msg.roomId !== activeId && !msg.type?.startsWith('scene_')) return;
 
     if (msg.type === 'game_deal') {
-      if (msg.deal) dealNewMatch(msg.deal.dealerSeat, true);
+      if (msg.deal) dealNewMatch(msg.deal.dealerSeat, true, msg.deal);
     } else if (msg.type === 'scene_room_full' || msg.type === 'scene_room_started' || msg.type === 'scene_reconnect_ack') {
+      if (msg.roomId) currentLocalRoomId.value = msg.roomId;
       if (msg.deal) {
-        dealNewMatch(msg.deal.dealerSeat, false);
+        dealNewMatch(msg.deal.dealerSeat, false, msg.deal);
       }
     } else if (msg.type === 'game_event') {
-      const evt = msg.event || msg.payload;
-      if (!evt) return;
+      const evt = { ...(msg.payload || {}), ...(msg.event || {}) };
+      if (typeof evt.seat !== 'number' && typeof msg.seat === 'number') {
+        evt.seat = msg.seat;
+      }
+      if (!evt.action) return;
       handleRemoteGameEvent(evt);
     }
   } catch {}
