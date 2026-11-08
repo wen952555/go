@@ -1538,6 +1538,8 @@ wss.on('connection', (ws) => {
               combo,
               nextTurn: p.nextTurn,
               winner: p.winner,
+              tile: p.tile,
+              ...p,
             },
             payload: {
               action,
